@@ -1,0 +1,23 @@
+<script src='https://www.wowza.com/downloads/rts-sdk/wowza.umd.js'></script>
+<script src="player.js"></script>
+
+<style>
+    #wowza-player {
+        width: 100%;
+        padding-top: 56.25%;
+        height: 0px;
+        position:relative;
+    }
+
+    #wowza-player video {
+        width: 100%;
+        height: 100%;
+        position:absolute;
+        top: 0;
+        left: 0;
+    }
+</style>
+
+<div id="wowza-player">
+    <video autoplay controls muted></video>
+</div>
