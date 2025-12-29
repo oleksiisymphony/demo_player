@@ -8,18 +8,30 @@
   const container = document.getElementById('wowza-player');
   if (!container) return console.warn('wowza-player container not found');
 
-  // Insert simple controls
+  // Find the player container wrapper
+  const playerContainer = container.closest('.player-container') || container.parentElement;
+
+  // Insert styled controls
   const controls = document.createElement('div');
-  controls.style.marginTop = '8px';
+  controls.className = 'audio-controls';
   controls.innerHTML = `
-    <button id="dp-play">Play</button>
-    <input id="dp-vol" type="range" min="0" max="1" step="0.01" value="1">
-    <span id="dp-status">idle</span>
+    <button id="dp-play" class="btn btn-primary btn-play">
+      <i class="bi bi-play-fill" id="dp-play-icon"></i>
+      <span id="dp-play-text">Play</span>
+    </button>
+    <div class="volume-wrapper">
+      <i class="bi bi-volume-up-fill volume-icon" id="dp-vol-icon"></i>
+      <input id="dp-vol" class="volume-slider" type="range" min="0" max="1" step="0.01" value="1">
+    </div>
+    <span id="dp-status" class="status-badge">Ready</span>
   `;
-  container.appendChild(controls);
+  playerContainer.appendChild(controls);
 
   const playBtn = document.getElementById('dp-play');
+  const playIcon = document.getElementById('dp-play-icon');
+  const playText = document.getElementById('dp-play-text');
   const volInput = document.getElementById('dp-vol');
+  const volIcon = document.getElementById('dp-vol-icon');
   const status = document.getElementById('dp-status');
 
   let ctx = null;
@@ -28,10 +40,40 @@
   let userGestureReceived = false;
   let streamReady = false;
   let currentMediaElement = null;
+  let isPlaying = false;
 
-  function setStatus(msg) {
+  function setStatus(msg, type = '') {
     console.log('[iOS WebRTC fix] ' + msg);
-    if (status) status.textContent = msg;
+    if (status) {
+      status.textContent = msg;
+      status.className = 'status-badge ' + type;
+    }
+  }
+
+  function updateVolumeIcon(value) {
+    if (value === 0) {
+      volIcon.className = 'bi bi-volume-mute-fill volume-icon';
+    } else if (value < 0.5) {
+      volIcon.className = 'bi bi-volume-down-fill volume-icon';
+    } else {
+      volIcon.className = 'bi bi-volume-up-fill volume-icon';
+    }
+  }
+
+  function updateVolumeTrack(value) {
+    const percent = value * 100;
+    volInput.style.setProperty('--volume-percent', percent + '%');
+  }
+
+  function updatePlayButton(playing) {
+    isPlaying = playing;
+    if (playing) {
+      playIcon.className = 'bi bi-pause-fill';
+      playText.textContent = 'Pause';
+    } else {
+      playIcon.className = 'bi bi-play-fill';
+      playText.textContent = 'Play';
+    }
   }
 
   // Find the current media element
@@ -49,7 +91,7 @@
       if (audioTracks.length > 0) {
         if (!streamReady) {
           streamReady = true;
-          setStatus('stream ready - tap Play for audio');
+          setStatus('Stream ready', 'connected');
           console.log('[iOS WebRTC fix] Stream detected with', audioTracks.length, 'audio track(s)');
         }
         return true;
@@ -68,23 +110,23 @@
 
     const mediaElement = getMediaElement();
     if (!mediaElement) {
-      setStatus('no media element found');
+      setStatus('No media found');
       return false;
     }
 
     const stream = mediaElement.srcObject;
     if (!stream || !(stream instanceof MediaStream)) {
-      setStatus('no MediaStream on element yet');
+      setStatus('Waiting for stream...');
       return false;
     }
 
     const audioTracks = stream.getAudioTracks();
     if (audioTracks.length === 0) {
-      setStatus('stream has no audio tracks');
+      setStatus('No audio tracks');
       return false;
     }
 
-    setStatus('wiring WebRTC stream to WebAudio...');
+    setStatus('Connecting audio...');
 
     try {
       // Create AudioContext only on user gesture
@@ -108,32 +150,34 @@
 
       wired = true;
       currentMediaElement = mediaElement;
-      setStatus('wired to WebAudio ✓');
       console.log('[iOS WebRTC fix] Successfully wired MediaStream to WebAudio');
       return true;
     } catch (err) {
       console.error('[iOS WebRTC fix] WebAudio wiring failed:', err);
-      setStatus('wiring failed: ' + err.message);
+      setStatus('Audio error');
 
       // Fallback: just use native audio (unmute it)
       mediaElement.muted = false;
       mediaElement.volume = Number(volInput.value);
-      setStatus('fallback: native audio');
       return false;
     }
   }
 
-  // Volume control
+  // Volume control with visual feedback
   volInput.addEventListener('input', (e) => {
     const v = Number(e.target.value);
+    updateVolumeIcon(v);
+    updateVolumeTrack(v);
+    
     if (gain) {
       gain.gain.value = v;
-      setStatus('gain: ' + v.toFixed(2));
     } else if (currentMediaElement) {
       currentMediaElement.volume = v;
-      setStatus('volume: ' + v.toFixed(2));
     }
   });
+
+  // Initialize volume track
+  updateVolumeTrack(1);
 
   // Poll for stream availability (but don't wire until user gesture)
   const pollInterval = setInterval(() => {
@@ -148,21 +192,28 @@
   // Play button handler - this is where we get the user gesture
   playBtn.addEventListener('click', async () => {
     userGestureReceived = true;
-    setStatus('play pressed');
 
     const mediaElement = getMediaElement();
     if (!mediaElement) {
-      setStatus('no media element found');
+      setStatus('No media found');
+      return;
+    }
+
+    // Toggle play/pause
+    if (isPlaying && !mediaElement.paused) {
+      mediaElement.pause();
+      updatePlayButton(false);
+      setStatus('Paused');
       return;
     }
 
     // Check if stream is available
     if (!mediaElement.srcObject) {
-      setStatus('waiting for stream...');
+      setStatus('Waiting for stream...');
       // Wait a bit for stream to arrive
       await new Promise(resolve => setTimeout(resolve, 500));
       if (!mediaElement.srcObject) {
-        setStatus('no stream available yet');
+        setStatus('No stream yet');
         return;
       }
     }
@@ -173,19 +224,28 @@
     // Start playback
     try {
       await mediaElement.play();
-      setStatus(wired ? 'playing (WebAudio)' : 'playing');
+      updatePlayButton(true);
+      setStatus('Playing', 'playing');
     } catch (err) {
       console.error('[iOS WebRTC fix] play failed:', err);
-      setStatus('play failed: ' + err.message);
+      setStatus('Play failed');
+      updatePlayButton(false);
     }
   });
+
+  // Listen for external play/pause events
+  const mediaElement = getMediaElement();
+  if (mediaElement) {
+    mediaElement.addEventListener('play', () => updatePlayButton(true));
+    mediaElement.addEventListener('pause', () => updatePlayButton(false));
+  }
 
   // Also handle volume slider touch as a user gesture opportunity
   volInput.addEventListener('touchstart', () => {
     userGestureReceived = true;
   }, { once: true });
 
-  // Diagnostic logging for touch/slider events
+  // Diagnostic logging for touch/slider events (debug mode)
   if (location.search.includes('debug')) {
     ['input', 'change', 'pointerdown', 'pointermove', 'pointerup', 'touchstart', 'touchmove', 'touchend'].forEach(ev => {
       volInput.addEventListener(ev, (e) => {
@@ -194,5 +254,5 @@
     });
   }
 
-  setStatus('ready - tap Play');
+  setStatus('Ready');
 })();
